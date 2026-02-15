@@ -9,7 +9,10 @@ const apiKey = import.meta.env.VITE_GEMINI_API_KEY || ''
 
 const genAI = new GoogleGenAI({ apiKey })
 
-// Helper to convert blob to base64 for Gemini InlineData
+// Max size for inline base64 (15 MB). Larger files use the File API.
+const MAX_INLINE_SIZE = 15 * 1024 * 1024
+
+// Helper to convert blob to base64 for Gemini InlineData (small files only)
 const fileToBase64 = (file: File | Blob): Promise<string> => {
     return new Promise((resolve, reject) => {
         const reader = new FileReader()
@@ -23,10 +26,25 @@ const fileToBase64 = (file: File | Blob): Promise<string> => {
     })
 }
 
+// Strict JSON Schema for the response — forces Gemini to output exactly this structure
+const anchorArraySchema = {
+    type: "array" as const,
+    items: {
+        type: "object" as const,
+        properties: {
+            measure: { type: "integer" as const, description: "The measure number (1-indexed)" },
+            time: { type: "number" as const, description: "Start time in seconds (to 0.01 precision)" }
+        },
+        required: ["measure", "time"]
+    }
+}
+
 export const aiService = {
     /**
      * Send audio + MusicXML to Gemini 3 Pro and get predicted anchor mappings.
-     * Builds a dynamic few-shot prompt from past user corrections for continuous learning.
+     * - Uses File API for large audio, inlineData for small
+     * - Uses responseSchema for bulletproof JSON output
+     * - Builds dynamic few-shot prompt with contextual guidance
      */
     async predictAnchors(audioFile: File | Blob, xmlText: string): Promise<{ measure: number; time: number }[]> {
         if (!apiKey) throw new Error("Missing VITE_GEMINI_API_KEY in your .env.local file.")
@@ -38,14 +56,16 @@ export const aiService = {
             const pastExamples = await projectService.getProjectsWithCorrections()
             if (pastExamples && pastExamples.length > 0) {
                 historyPrompt = "\n\n--- LEARNING FROM PAST CORRECTIONS ---\n"
-                historyPrompt += "Below are examples of your previous predictions and how the human corrected them for live performances. "
-                historyPrompt += "Learn from these patterns — pay attention to how the user adjusts for fermatas, tempo changes, ritardandos, rubatos, and performance expression:\n\n"
+                historyPrompt += "Below are examples of your previous predictions vs the human's final corrections. "
+                historyPrompt += "Use these ONLY to understand the user's general latency bias and timing preferences "
+                historyPrompt += "(e.g., the user consistently places anchors 0.1s earlier, or prefers fermatas held 1.5x longer). "
+                historyPrompt += "Do NOT blindly copy timing offsets — each piece has different musical content. "
+                historyPrompt += "Rely ONLY on the current audio waveform and MusicXML for musical cues like fermatas, ritardandos, and tempo changes.\n\n"
                 pastExamples.forEach((ex, i) => {
                     historyPrompt += `Example ${i + 1}: \"${ex.title}\"\n`
                     historyPrompt += `Your Initial Prediction: ${JSON.stringify(ex.ai_anchors)}\n`
                     historyPrompt += `User's Final Correction: ${JSON.stringify(ex.anchors)}\n\n`
                 })
-                historyPrompt += "Apply these learned correction patterns to your prediction for the new piece below.\n"
                 historyPrompt += "--- END LEARNING EXAMPLES ---\n\n"
             }
         } catch (err) {
@@ -68,20 +88,41 @@ Instructions:
 4. Measure 1 ALWAYS starts at time 0.0.
 5. Be precise — timestamps should be accurate to the nearest 0.01 seconds.
 
-${historyPrompt}
+${historyPrompt}`
 
-Output ONLY a valid JSON array in this exact format (no markdown fencing, no explanation):
-[
-  {"measure": 1, "time": 0.0},
-  {"measure": 2, "time": 2.45},
-  {"measure": 3, "time": 5.12}
-]`
+        const mimeType = audioFile.type || 'audio/mp3'
 
-        // Convert audio to base64
-        const base64Audio = await fileToBase64(audioFile)
-        const mimeType = (audioFile instanceof File ? audioFile.type : audioFile.type) || 'audio/mp3'
+        // --- BUILD AUDIO PART ---
+        // Use File API for large files (>15MB), inlineData for small ones
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let audioPart: any
+
+        if (audioFile.size > MAX_INLINE_SIZE) {
+            // Large file: upload via Gemini File API to avoid base64 bloat / 413 errors
+            console.log(`[AI] Audio file is ${(audioFile.size / 1024 / 1024).toFixed(1)}MB — using File API upload`)
+            const uploadResult = await genAI.files.upload({
+                file: audioFile,
+                config: { mimeType }
+            })
+            audioPart = {
+                fileData: {
+                    fileUri: uploadResult.uri,
+                    mimeType: mimeType,
+                }
+            }
+        } else {
+            // Small file: inline base64 is fine
+            const base64Audio = await fileToBase64(audioFile)
+            audioPart = {
+                inlineData: {
+                    data: base64Audio,
+                    mimeType: mimeType,
+                }
+            }
+        }
 
         // Call Gemini 3 Pro with multimodal content (audio + text)
+        // Uses responseSchema for bulletproof structured output
         const response = await genAI.models.generateContent({
             model: "gemini-3-pro-preview",
             contents: [
@@ -89,23 +130,19 @@ Output ONLY a valid JSON array in this exact format (no markdown fencing, no exp
                     role: "user",
                     parts: [
                         { text: promptText },
-                        {
-                            inlineData: {
-                                data: base64Audio,
-                                mimeType: mimeType,
-                            }
-                        },
+                        audioPart,
                         { text: `\n\n--- MusicXML Score Content ---\n${xmlText}` }
                     ]
                 }
             ],
             config: {
                 responseMimeType: "application/json",
+                responseJsonSchema: anchorArraySchema,
                 temperature: 0.2, // Low temperature for more deterministic timing predictions
             }
         })
 
-        // Parse the response
+        // Parse the response (schema guarantees valid JSON, but we still validate)
         const responseText = response.text || ''
         try {
             const parsed = JSON.parse(responseText)

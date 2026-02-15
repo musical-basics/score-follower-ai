@@ -402,6 +402,7 @@ function App() {
         }))
         setAiAnchors(cleanPoints) // Store AI's original prediction
         setAnchors(cleanPoints)   // Apply to timeline for user to review
+        setBeatAnchors([])        // Clear stale beat anchors — they must be recalculated
         alert('\u2705 AI Mapped successfully! Review and adjust the anchors, then click "Teach AI" when done.')
       }
     } catch (err: unknown) {
