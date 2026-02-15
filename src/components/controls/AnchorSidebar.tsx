@@ -27,6 +27,11 @@ interface AnchorSidebarProps {
     upsertBeatAnchor?: (measure: number, beat: number, time: number) => void
     subdivision?: number // NEW
     setSubdivision?: (val: number) => void // NEW
+    // AI Anchor Mapping
+    handleAIPredict?: () => void
+    handleTeachAI?: () => void
+    isAILoading?: boolean
+    hasAIPredictions?: boolean
 }
 
 // Note: I'm adding functional props here (upsert, delete, etc.) to ensure it actually works 
@@ -36,7 +41,8 @@ export function AnchorSidebar({
     handleJumpToMeasure, handleTap, handleReset, mode, currentMeasure,
     handleAudioSelect, handleXmlSelect, toggleMode,
     isLevel2Mode, toggleLevel2, regenerateBeats, beatAnchors = [], upsertBeatAnchor,
-    subdivision, setSubdivision
+    subdivision, setSubdivision,
+    handleAIPredict, handleTeachAI, isAILoading, hasAIPredictions
 }: AnchorSidebarProps) {
 
     // Derived state for rendering ghost measures
@@ -141,6 +147,39 @@ export function AnchorSidebar({
                     </div>
                 )}
             </div>
+
+            {/* AI Assistant Section */}
+            {(handleAIPredict || handleTeachAI) && (
+                <div className={`p-4 border-b space-y-2 ${darkMode ? 'border-slate-800 bg-[#222222]' : 'border-indigo-100 bg-indigo-50/50'}`}>
+                    <h2 className={`font-bold text-[10px] uppercase tracking-wide mb-2 flex items-center gap-1 ${darkMode ? 'text-indigo-400' : 'text-indigo-600'}`}>
+                        ✨ Gemini AI Assistant
+                    </h2>
+                    {handleAIPredict && (
+                        <button
+                            onClick={handleAIPredict}
+                            disabled={isAILoading || mode !== 'RECORD'}
+                            className={`w-full py-2 rounded text-xs font-bold transition-all shadow-sm flex items-center justify-center gap-2 ${isAILoading || mode !== 'RECORD'
+                                    ? 'bg-indigo-300 dark:bg-indigo-900/50 cursor-not-allowed opacity-70 text-white/70'
+                                    : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-500/20'
+                                }`}
+                        >
+                            {isAILoading ? '🧠 Analyzing Audio & XML...' : '🪄 AI Anchor Map'}
+                        </button>
+                    )}
+                    {handleTeachAI && hasAIPredictions && (
+                        <button
+                            onClick={handleTeachAI}
+                            disabled={mode !== 'RECORD'}
+                            className={`w-full py-2 rounded text-xs font-bold transition-all border shadow-sm ${darkMode
+                                    ? 'border-indigo-500/50 text-indigo-400 hover:bg-indigo-900/30'
+                                    : 'border-indigo-300 text-indigo-700 hover:bg-indigo-100 bg-white'
+                                }`}
+                        >
+                            🎓 Teach AI Fixed Mappings
+                        </button>
+                    )}
+                </div>
+            )}
 
             <div className={`p-4 border-b ${darkMode ? 'border-slate-800' : 'border-gray-200'}`}>
                 <div className="flex items-center justify-between">

@@ -72,6 +72,9 @@ export interface Project {
     beat_anchors?: { measure: number; beat: number; time: number }[] | null
     subdivision?: number | null
     is_level2?: boolean | null
+    // AI Anchor Mapping (stores Gemini's initial predictions)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ai_anchors?: any[] | null
     created_at: string
     updated_at: string
 }
@@ -102,7 +105,9 @@ export const projectService = {
     async saveProject(
         title: string, audioFile: File, xmlFile: File, anchors: any[],
         beatAnchors?: { measure: number; beat: number; time: number }[],
-        subdivision?: number, isLevel2?: boolean
+        subdivision?: number, isLevel2?: boolean,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        aiAnchors?: any[]
     ) {
         // 1. Upload files
         console.log('[ProjectService] Uploading audio...')
@@ -123,6 +128,7 @@ export const projectService = {
                 beat_anchors: beatAnchors || [],
                 subdivision: subdivision ?? 4,
                 is_level2: isLevel2 ?? false,
+                ai_anchors: aiAnchors || [],
                 updated_at: new Date().toISOString()
             })
             .select()
@@ -137,7 +143,9 @@ export const projectService = {
         id: string, anchors: any[],
         beatAnchors?: { measure: number; beat: number; time: number }[],
         subdivision?: number, isLevel2?: boolean,
-        title?: string
+        title?: string,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        aiAnchors?: any[]
     ) {
         console.log(`[ProjectService] Updating project ${id}...`)
 
@@ -152,6 +160,9 @@ export const projectService = {
 
         if (title) {
             updates.title = title
+        }
+        if (aiAnchors) {
+            updates.ai_anchors = aiAnchors
         }
 
         const { data, error } = await supabase
@@ -173,6 +184,20 @@ export const projectService = {
 
         if (error) throw error
         return data || []
+    },
+
+    // Fetch projects that have AI predictions (for few-shot learning context)
+    async getProjectsWithCorrections(): Promise<Project[]> {
+        const { data, error } = await supabase
+            .from('projects')
+            .select('*')
+            .not('ai_anchors', 'is', null)
+            .order('updated_at', { ascending: false })
+            .limit(3) // Only pull the last 3 to save context tokens
+
+        if (error) throw error
+        // Filter out projects where ai_anchors is empty array
+        return (data || []).filter(p => p.ai_anchors && p.ai_anchors.length > 0)
     },
 
     // Fetch a single project by ID

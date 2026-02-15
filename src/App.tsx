@@ -8,6 +8,7 @@ import { WaveformTimeline } from './components/controls/WaveformTimeline'
 import { PublishModal } from './components/controls/PublishModal'
 import { useRecorder } from './hooks/use-recorder'
 import { projectService, type Project } from './services/projectService'
+import { aiService } from './services/aiService'
 export interface Anchor {
   measure: number
   time: number
@@ -45,6 +46,11 @@ function App() {
   const [_isLoadModalOpen, setIsLoadModalOpen] = useState(false)
   const [isPublishModalOpen, setIsPublishModalOpen] = useState(false)
   const [isPublishing, setIsPublishing] = useState(false)
+
+  // AI Anchor Mapping state
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [aiAnchors, setAiAnchors] = useState<any[]>([])
+  const [isAILoading, setIsAILoading] = useState(false)
 
   // File State
   const [audioFile, setAudioFile] = useState<File | null>(null)
@@ -147,7 +153,7 @@ function App() {
 
       const newProject = await projectService.saveProject(
         title, finalAudioFile, finalXmlFile, anchors,
-        beatAnchors, subdivision, isLevel2Mode
+        beatAnchors, subdivision, isLevel2Mode, aiAnchors
       )
       alert('New project created!')
       const updatedProjects = await projectService.getProjects()
@@ -168,7 +174,7 @@ function App() {
     try {
       await projectService.updateProject(
         currentProjectId, anchors,
-        beatAnchors, subdivision, isLevel2Mode
+        beatAnchors, subdivision, isLevel2Mode, undefined, aiAnchors
       )
       alert('Project saved!')
       const updatedProjects = await projectService.getProjects()
@@ -189,6 +195,8 @@ function App() {
     setBeatAnchors(project.beat_anchors || [])
     setSubdivision(project.subdivision ?? 4)
     setIsLevel2Mode(project.is_level2 ?? false)
+    // Restore AI state
+    setAiAnchors(project.ai_anchors || [])
     setCurrentProjectId(project.id)
     setCurrentProjectTitle(project.title)
     setMode('RECORD')
@@ -215,6 +223,7 @@ function App() {
     setBeatAnchors([])
     setSubdivision(4)
     setIsLevel2Mode(false)
+    setAiAnchors([])
     setCurrentProjectId(null)
     setCurrentProjectTitle(null)
     setMode('RECORD')
@@ -359,6 +368,69 @@ function App() {
   const toggleMode = useCallback(() => {
     setMode(prev => prev === 'RECORD' ? 'PLAYBACK' : 'RECORD')
   }, [])
+
+  // --- AI ANCHOR MAPPING ---
+  const handleAIPredict = async () => {
+    if (!audioFile && !audioUrl) return alert('Please load audio first.')
+    if (!xmlFile && !xmlUrl) return alert('Please load XML first.')
+
+    setIsAILoading(true)
+    try {
+      // Get audio blob
+      let fileToAnalyze: File | Blob | null = audioFile
+      if (!fileToAnalyze && audioUrl) {
+        const res = await fetch(audioUrl)
+        fileToAnalyze = await res.blob()
+      }
+
+      // Get XML text
+      let xmlText = ''
+      if (xmlFile) {
+        xmlText = await xmlFile.text()
+      } else {
+        const res = await fetch(xmlUrl || DEFAULT_XML)
+        xmlText = await res.text()
+      }
+
+      if (!fileToAnalyze || !xmlText) throw new Error('Could not load files for AI')
+
+      const predicted = await aiService.predictAnchors(fileToAnalyze, xmlText)
+      if (predicted && Array.isArray(predicted)) {
+        const cleanPoints = predicted.map((p: { measure: number; time: number }) => ({
+          measure: Number(p.measure),
+          time: Number(p.time)
+        }))
+        setAiAnchors(cleanPoints) // Store AI's original prediction
+        setAnchors(cleanPoints)   // Apply to timeline for user to review
+        alert('\u2705 AI Mapped successfully! Review and adjust the anchors, then click "Teach AI" when done.')
+      }
+    } catch (err: unknown) {
+      console.error(err)
+      alert('AI Mapping failed: ' + (err instanceof Error ? err.message : String(err)))
+    } finally {
+      setIsAILoading(false)
+    }
+  }
+
+  const handleTeachAI = async () => {
+    if (!currentProjectId) {
+      alert('Please Save the project first before teaching the AI.')
+      return
+    }
+    try {
+      // Save anchors (user's corrections) alongside ai_anchors (AI's original guess)
+      await projectService.updateProject(
+        currentProjectId, anchors, beatAnchors, subdivision, isLevel2Mode,
+        currentProjectTitle || undefined, aiAnchors
+      )
+      alert('\ud83c\udf93 Taught AI your fixed mappings! It will use this to learn for future pieces.')
+      const updatedProjects = await projectService.getProjects()
+      setProjects(updatedProjects)
+    } catch (err) {
+      console.error(err)
+      alert('Failed to teach AI.')
+    }
+  }
 
   const handleSeeked = useCallback(() => {
     if (mode === 'RECORD' && audioRef.current && audioRef.current.currentTime < 0.1 && anchors.length > 1) {
@@ -618,8 +690,8 @@ function App() {
           toggleLevel2={toggleLevel2}
           regenerateBeats={generateBeatAnchors}
           upsertBeatAnchor={upsertBeatAnchor}
-          subdivision={subdivision} // NEW
-          setSubdivision={setSubdivision} // NEW
+          subdivision={subdivision}
+          setSubdivision={setSubdivision}
           darkMode={darkMode}
           upsertAnchor={upsertAnchor}
           handleDelete={handleDelete}
@@ -632,6 +704,10 @@ function App() {
           handleAudioSelect={handleAudioSelect}
           handleXmlSelect={handleXmlSelect}
           toggleMode={toggleMode}
+          handleAIPredict={handleAIPredict}
+          handleTeachAI={handleTeachAI}
+          isAILoading={isAILoading}
+          hasAIPredictions={aiAnchors && aiAnchors.length > 0}
         />
 
       </div>
