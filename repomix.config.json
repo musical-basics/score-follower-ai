@@ -1,0 +1,39 @@
+{
+    "output": {
+        "filePath": "repomix-output.xml",
+        "style": "xml"
+    },
+    "ignore": {
+        "useGitignore": true,
+        "useDefaultPatterns": true,
+        "customPatterns": [
+            "node_modules/**",
+            "pnpm-lock.yaml",
+            "package-lock.json",
+            "yarn.lock",
+            "dist/**",
+            "build/**",
+            ".git/**",
+            "*.log",
+            ".env",
+            ".env.*",
+            ".DS_Store",
+            ".vscode/**",
+            ".idea/**",
+            "**/*.map",
+            "coverage/**",
+            "repomix-output.xml",
+            "*-repomix-output.xml",
+            "**/*repomix*.xml",
+            "src/assets/react.svg",
+            "public/vite.svg",
+            "public/*.mp3",
+            "README.md",
+            "tsconfig.json",
+            "tsconfig.app.json",
+            "tsconfig.node.json",
+            "eslint.config.js",
+            "migrations/supabase_schema.sql"
+        ]
+    }
+}
